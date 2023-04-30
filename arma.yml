@@ -1,0 +1,209 @@
+- name: Install Arma3-Gameserver with Headless-Clients and Mods
+  hosts: arma
+  become_user: root
+  become: true
+  vars_prompt:
+
+    - name: steamcmd_path
+      prompt: SteamCMD-Install-Path (With / at the end)
+      private: false
+      default: /opt/steam/
+ 
+    - name: armaserver_path
+      prompt: ArmaServer-Path? (With / at the end)
+      private: false
+      default: /opt/games/arma/
+  
+    - name: steamcmd_user
+      prompt: SteamCMD-Username
+      private: false
+      default: anonymous
+
+    - name: steamcmd_password
+      prompt: SteamCMD-Password?
+      private: true
+      default: ''
+ 
+    - name: armaserver_config
+      prompt: Path to Arma3Server-Config
+      private: false
+      default: none
+
+    - name: armaserver_modset
+      prompt: Path to Arma3Server-Modset HTML
+      private: false
+      default: none
+
+    - name: auto_server
+      prompt: Do you wish to enable Auto-Updates for Arma3-Server (y|n)?
+      private: false
+      default: n
+
+    - name: auto_mod
+      prompt: Do you wish to enable Auto-Updates for Arma3-Modset (y|n)?
+      private: false
+      default: n
+
+    - name: update_hour
+      prompt: Which hour the Updates get be done?
+      private: false
+      default: 4
+      
+    - name: update_minute
+      prompt: Which minute the Updates get be done?
+      default: 0
+      private: false
+
+    - name: arma_headless
+      prompt: How many headless-clients do you need?
+      default: none
+      private: false
+
+    - name: arma_headless_pw
+      prompt: Password for headless-clients to join your server?
+      default: ''
+      private: true
+       
+  tasks:
+    - name: Stop Arma-Server when exists
+      ansible.builtin.systemd:
+        name: arma.target
+        state: stopped
+      ignore_errors: true
+
+    - name: Create Arma-Group
+      ansible.builtin.group:
+        name: arma
+        state: present
+
+    - name: Create Arma-User
+      ansible.builtin.user:
+        name: arma
+        group: arma
+        create_home: true
+        shell: /bin/bash
+         
+    - name: Build needed Paths for steamcmd and armaserver
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+      with_items:
+        - ["{{ steamcmd_path }}", "{{ armaserver_path }}", "/home/arma/.local/share/Arma 3", "/home/arma/.local/share/Arma 3 - Other Profiles"]
+    
+    - name: Add 32bir Support for SteamCMD
+      ansible.builtin.lineinfile:
+        dest: /var/lib/dpkg/arch
+        line: "amd64"
+        create: yes          
+    
+    - ansible.builtin.lineinfile:
+       dest: /var/lib/dpkg/arch
+       line: "i386"
+       create: yes
+      register: old
+       
+    - ansible.builtin.apt:
+        name: "{{ item }}"
+        update_cache: "{{ old.changed }}"
+        state: latest
+      with_items:
+        - ["libc6:i386", "libstdc++6:i386", "zlib1g:i386"]
+            
+    - name: Install depend packages
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: latest
+      with_items:
+        - ["python3-pip", "lib32gcc-s1", "software-properties-common", "git", "gzip", "unzip", "rename"]
+            
+    - name: Install SteamCMD
+      ansible.builtin.get_url:
+        url: https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
+        dest: "{{ steamcmd_path }}"
+      
+    - ansible.builtin.shell: "cd {{ steamcmd_path }} && tar -xvzf steamcmd_linux.tar.gz"          
+    
+    - ansible.builtin.shell: "{{ steamcmd_path }}./steamcmd.sh +login {{ steamcmd_user }} {{ steamcmd_password }} +quit"
+         
+    - name: Install Arma3-Server
+      ansible.builtin.shell: "{{ steamcmd_path }}./steamcmd.sh +force_install_dir {{ armaserver_path }} +login {{ steamcmd_user }} {{ steamcmd_password }} +app_update 233780 validate +quit"
+        
+    - name: Deploy Mod-Path for Mods in Arma-Server
+      ansible.builtin.file:
+        path: "{{ armaserver_path }}mods"
+        state: directory
+        
+    - name: Get our Fancy-Script for Mods
+      ansible.builtin.git:
+        repo: 'https://github.com/Seagra/arma3mods.git'
+        dest: /root/modset/
+        clone: yes
+          
+    - name: Install Python3-Requirements
+      ansible.builtin.shell: "pip3 install -r /root/modset/requirements.txt"
+        
+    - name: Copy Mod-File to correct Position
+      ansible.builtin.copy:
+        src: "{{ armaserver_modset }}"
+        dest: "/root/mods.html"
+      when: armaserver_modset != "none"
+       
+    - name: Check if server.cfg exists
+      ansible.builtin.stat:
+        path: "{{ armaserver_path }}server.cfg"
+      register: exist_armaconfig
+       
+    - name: Copy Server-Config to correct Position
+      ansible.builtin.copy:
+        src: "{{ armaserver_config }}"
+        dest: "{{ armaserver_path }}server.cfg"
+      when: armaserver_config != "none"
+
+    - name: No server.cfg is given, so we touch it ;D
+      ansible.builtin.file:
+        path: "{{ armaserver_path }}server.cfg"
+        state: touch
+        owner: arma
+        group: arma
+        mode: '0760'
+      when: armaserver_config == "none" and not exist_armaconfig.stat.exists
+    
+    - name: Install Mods with Headless
+      ansible.builtin.shell: "python3 /root/modset/arma3mod.py -m /root/mods.html -a {{ armaserver_path }} -s {{ steamcmd_path }} -u {{ steamcmd_user }} -p {{ steamcmd_password }} -x {{ arma_headless }} -c {{ arma_headless_pw }} -b true"
+      when: armaserver_modset != "none" and arma_headless|int > 0
+
+    - name: Install Mods without Headless
+      ansible.builtin.shell: "python3 /root/modset/arma3mod.py -m /root/mods.html -a {{ armaserver_path }} -s {{ steamcmd_path }} -u {{ steamcmd_user }} -p {{ steamcmd_password }} -b true"
+      when: armaserver_modset != "none" and arma_headless|int == 0
+ 
+    - name: Set correct User-Permissions
+      ansible.builtin.file:
+        path: "{{ armaserver_path }}"
+        owner: arma
+        group: arma
+        recurse: yes
+        mode: '0760'
+   
+    - name: Start Arma3-Server
+      ansible.builtin.systemd:
+        state: started
+        name: arma.target
+        enabled: true
+
+    - name: Set Auto-Update for Mods
+      ansible.builtin.cron:
+        name: Arma-Modset Auto-Update
+        hour: "{{ update_hour }}"
+        minute: "{{ update_minute }}"
+        user: root
+        job: "/usr/bin/python3 /root/modset/arma3mod.py -m /root/mods.html -a {{ armaserver_path }} -s {{ steamcmd_path }} -u {{ steamcmd_user }} -p {{ steamcmd_password }} -d true"       
+      when: auto_mod == "y"
+       
+    - name: Set Auto-Update for Steam-Server
+      ansible.builtin.cron:
+        name: Arma-Server Auto-Update
+        hour: "{{ update_hour }}"
+        minute: "{{ update_minute }}"
+        user: root
+        job: "{{ steamcmd_path }}./steamcmd.sh +force_install_dir {{ armaserver_path }} +login {{ steamcmd_user }} {{ steamcmd_password }} +app_update 233780 validate +quit"
+      when: auto_server == "y" 
