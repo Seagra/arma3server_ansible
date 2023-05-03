@@ -169,7 +169,7 @@
       when: armaserver_config == "none" and not exist_armaconfig.stat.exists
     
     - name: Install Mods with Headless
-      ansible.builtin.shell: "python3 /root/modset/arma3mod.py -m /root/mods.html -a {{ armaserver_path }} -s {{ steamcmd_path }} -u {{ steamcmd_user }} -p {{ steamcmd_password }} -x {{ arma_headless }} -c {{ arma_headless_pw }} -b true"
+      ansible.builtin.shell: "python3 /root/modset/arma3mod.py -m /root/mods.html -a {{ armaserver_path }} -s {{ steamcmd_path }} -u {{ steamcmd_user }} -p {{ steamcmd_password }} -x {{ arma_headless }} -c {{ arma_headless_pw }}"
       when: armaserver_modset != "none" and arma_headless|int > 0
 
     - name: Install Mods without Headless
